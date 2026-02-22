@@ -157,12 +157,21 @@
   * {
     @apply border-border outline-ring/50;
   }
+  html {
+    background: var(--background);
+  }
   body {
     @apply bg-background text-foreground;
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     overscroll-behavior: none;
+    margin: 0;
+    padding: 0;
+  }
+  #root {
+    min-height: 100vh;
+    background: var(--background);
   }
   button:not(:disabled),
   [role="button"]:not([aria-disabled="true"]),
@@ -250,14 +259,25 @@
   }
 }
 
-/* Phone frame wrapper */
+/* App container - responsive for bolt.new preview */
 .phone-frame {
   width: 100%;
-  max-width: 430px;
+  max-width: 100%;
   margin: 0 auto;
   min-height: 100dvh;
   position: relative;
   overflow: hidden;
+  background: var(--background);
+}
+
+/* Desktop/Tablet: Show mobile frame simulation */
+@media (min-width: 640px) {
+  .phone-frame {
+    max-width: 430px;
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    box-shadow: 0 0 50px oklch(0.1 0.02 280 / 0.5);
+  }
 }
 
 /* Animations */
