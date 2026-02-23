@@ -1,13 +1,14 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useApp } from './AppContext';
-import { generateFeedFact, type AIFeedItem } from './lib/ai';
-import { MASCOT, ICONS, FEED_CARDS } from './assets';
+import { type AIFeedItem, generatePersonalizedFeedback } from './lib/ai';
+import { initCache, getNextFacts, getNextFact } from './lib/feedCache';
+import { MASCOT, ICONS } from './assets';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeft, Bookmark, Zap, HelpCircle, X, Check } from 'lucide-react';
+import { ArrowLeft, Bookmark, Zap, HelpCircle, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function FeedScreen() {
-  const { setScreen, user, preferences, addXP, removeXP, addSavedFact, savedFacts, getRoast } = useApp();
+  const { setScreen, user, preferences, addXP, removeXP, addSavedFact, savedFacts } = useApp();
   const [items, setItems] = useState<AIFeedItem[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -16,51 +17,54 @@ export default function FeedScreen() {
   const [activeQuizItem, setActiveQuizItem] = useState<AIFeedItem | null>(null);
   const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null);
   const [quizResult, setQuizResult] = useState<'none' | 'correct' | 'wrong'>('none');
+  const [aiFeedback, setAiFeedback] = useState<string>('');
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const cacheInitialized = useRef(false);
 
-  // Load initially
+  // Cache initialisieren & sofort Karten zeigen
   useEffect(() => {
-    loadMoreFacts(3);
+    if (cacheInitialized.current) return;
+    cacheInitialized.current = true;
+
+    // Sofort Karten aus Fallbacks zeigen
+    const instant = initCache(
+      user?.grade || '8',
+      user?.interests || 'Wissenschaft, Kurioses',
+      preferences.language
+    );
+    setItems(instant);
+
+    // Nach kurzer Zeit versuchen, AI-Karten aus dem Buffer zu holen
+    const timer = setTimeout(() => {
+      const aiCards = getNextFacts(
+        3,
+        user?.grade || '8',
+        user?.interests || 'Wissenschaft, Kurioses',
+        preferences.language
+      );
+      if (aiCards.length > 0) {
+        setItems(prev => [...prev, ...aiCards]);
+      }
+    }, 3000);
+
+    return () => clearTimeout(timer);
   }, []);
 
-  const loadMoreFacts = async (count = 1) => {
+  const loadMoreFacts = (count = 2) => {
     if (loadingMore) return;
     setLoadingMore(true);
-    const newItems: AIFeedItem[] = [];
 
-    // Fallbacks if AI fails
-    const fallbacks: AIFeedItem[] = FEED_CARDS.map((c) => ({
-      category: c.category,
-      title: c.title,
-      content: c.content,
-      quiz: {
-        type: c.quiz.type as any,
-        question: c.quiz.question,
-        options: c.quiz.options,
-        correct: c.quiz.correct,
-      },
-    }));
+    // Aus dem Cache holen – sofort, kein await nötig
+    const newItems = getNextFacts(
+      count,
+      user?.grade || '8',
+      user?.interests || 'Wissenschaft, Kurioses',
+      preferences.language
+    );
 
-    for (let i = 0; i < count; i++) {
-      try {
-        const fact = await generateFeedFact(
-          preferences.aiUrl,
-          user?.grade || '8',
-          user?.interests || 'Wissenschaft, Kurioses',
-          preferences.language
-        );
-        if (fact) {
-          newItems.push(fact);
-        } else {
-          newItems.push({ ...fallbacks[Math.floor(Math.random() * fallbacks.length)] });
-        }
-      } catch {
-        newItems.push({ ...fallbacks[Math.floor(Math.random() * fallbacks.length)] });
-      }
-    }
-
-    setItems((prev) => [...prev, ...newItems]);
+    setItems(prev => [...prev, ...newItems]);
     setLoadingMore(false);
   };
 
@@ -94,9 +98,11 @@ export default function FeedScreen() {
     setActiveQuizItem(item);
     setSelectedAnswer(null);
     setQuizResult('none');
+    setAiFeedback('');
+    setFeedbackLoading(false);
   };
 
-  const handleAnswer = (idx: number) => {
+  const handleAnswer = async (idx: number) => {
     if (!activeQuizItem) return;
     setSelectedAnswer(idx);
     const correct = idx === activeQuizItem.quiz.correct;
@@ -104,10 +110,31 @@ export default function FeedScreen() {
 
     if (correct) {
       addXP(25);
-      toast.success('+25 XP! 🎉', { description: 'Richtig! Weiter so!' });
     } else {
       removeXP(5);
-      toast.error(getRoast(), { description: '-5 XP 💀' });
+    }
+
+    // Personalisiertes AI-Feedback im Hintergrund laden
+    setFeedbackLoading(true);
+    setAiFeedback(correct ? 'Richtig! 🎉' : 'Leider falsch 💀');
+
+    try {
+      const userAnswer = activeQuizItem.quiz.options[idx];
+      const correctAnswer = activeQuizItem.quiz.options[activeQuizItem.quiz.correct];
+      const feedback = await generatePersonalizedFeedback(
+        activeQuizItem.quiz.question,
+        correctAnswer,
+        userAnswer,
+        correct,
+        user?.name || 'du',
+        user?.roastLevel || 3,
+        preferences.language
+      );
+      setAiFeedback(feedback);
+    } catch {
+      // Fallback bleibt stehen
+    } finally {
+      setFeedbackLoading(false);
     }
   };
 
@@ -139,7 +166,7 @@ export default function FeedScreen() {
 
           return (
             <div key={idx} className="h-dvh w-full snap-start snap-always relative flex flex-col justify-end pb-24">
-              {/* Background gradient color logic based on category, just a subtle glow */}
+              {/* Background gradient */}
               <div
                 className="absolute inset-0 pointer-events-none opacity-40 mix-blend-screen"
                 style={{
@@ -261,11 +288,28 @@ export default function FeedScreen() {
                     <img
                       src={quizResult === 'correct' ? MASCOT.happy : MASCOT.crying}
                       alt="Fynix Result"
-                      className="w-32 h-32 object-contain drop-shadow-2xl mb-4"
+                      className="w-28 h-28 object-contain drop-shadow-2xl mb-3"
                     />
+
+                    {/* Personalisiertes AI-Feedback */}
+                    <div className="relative px-5 py-3 bg-card/80 backdrop-blur-md rounded-2xl border border-white/10 max-w-xs text-center mb-4">
+                      <p className={`text-sm font-medium ${quizResult === 'correct' ? 'text-green-400' : 'text-red-400'}`}>
+                        {quizResult === 'correct' ? '+25 XP 🎉' : '-5 XP 💀'}
+                      </p>
+                      <p className="text-sm text-foreground/80 mt-1">
+                        {feedbackLoading ? (
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 bg-primary rounded-full animate-pulse" />
+                            <span className="w-1.5 h-1.5 bg-primary rounded-full animate-pulse" style={{ animationDelay: '0.15s' }} />
+                            <span className="w-1.5 h-1.5 bg-primary rounded-full animate-pulse" style={{ animationDelay: '0.3s' }} />
+                          </span>
+                        ) : aiFeedback}
+                      </p>
+                    </div>
+
                     <button
                       onClick={closeQuiz}
-                      className="mt-4 px-8 py-3 bg-primary text-primary-foreground font-display font-bold rounded-full active:scale-95"
+                      className="mt-2 px-8 py-3 bg-primary text-primary-foreground font-display font-bold rounded-full active:scale-95"
                     >
                       Weiter
                     </button>
